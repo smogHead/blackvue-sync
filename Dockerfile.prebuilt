@@ -1,0 +1,8 @@
+# Used by build-for-synology.ps1: the app is compiled on your PC, so this only copies files
+# (no RUN steps) and works for any NAS CPU type without emulation.
+FROM mcr.microsoft.com/dotnet/runtime:10.0
+WORKDIR /app
+COPY publish/ .
+ENV BlackVue__Destination=/recordings
+VOLUME /recordings
+ENTRYPOINT ["dotnet", "BlackVueSync.dll"]

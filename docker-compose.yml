@@ -1,0 +1,29 @@
+# Synology Container Manager project.
+# Put this folder at /volume1/docker/blackvue-sync and create a Project pointing at it.
+services:
+  blackvue-sync:
+    build: .                        # remove this line if you imported a prebuilt image instead
+    image: blackvue-sync:latest
+    container_name: blackvue-sync
+    restart: unless-stopped
+    # UID:GID the container writes files as. 1026 is usually the first DSM user you created and
+    # 100 is the "users" group. Check over SSH with: id <your-dsm-username>
+    user: "1026:100"
+    environment:
+      TZ: Europe/London                 # your timezone; used for folder dates and retention
+      BlackVue__Host: 192.168.1.50      # dashcam's IP, reserved in your router's DHCP settings
+      BlackVue__PollIntervalSeconds: 60
+      BlackVue__DownloadGps: "true"
+      BlackVue__DownloadThumbnails: "false"
+      BlackVue__RecordingTypes: ""      # e.g. "E,M" for events + manual only; empty = everything
+      BlackVue__PrioritizeEvents: "true"
+      BlackVue__Layout: Daily           # Flat | Daily | Monthly
+      BlackVue__KeepDays: 0             # 0 = keep forever
+      BlackVue__MinFreeSpaceGb: 20
+    volumes:
+      - /volume1/dashcam:/recordings    # the "dashcam" shared folder you create in DSM
+    logging:                            # keep the container log from growing forever
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

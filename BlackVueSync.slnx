@@ -1,0 +1,17 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path=".dockerignore" />
+    <File Path=".gitignore" />
+    <File Path="build-for-synology.ps1" />
+    <File Path="docker-compose.yml" />
+    <File Path="Dockerfile" />
+    <File Path="Dockerfile.prebuilt" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/BlackVueSync/BlackVueSync.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BlackVueSync.Tests/BlackVueSync.Tests.csproj" />
+  </Folder>
+</Solution>
