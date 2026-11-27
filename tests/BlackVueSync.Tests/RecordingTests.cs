@@ -52,6 +52,7 @@ public class RecordingTests
     [InlineData("readme.txt")]
     [InlineData("20261327_120000_NF.mp4")] // month 13
     [InlineData("SYNOVIDEO_VIDEO_SCREENSHOT.jpg")]
+    [InlineData("._20260630_030201_NF.mp4")] // macOS junk seen in a real camera's list; camera returns 500 for it
     public void TryParse_RejectsOtherFiles(string name) => Assert.Null(Recording.TryParse(name));
 
     [Fact]

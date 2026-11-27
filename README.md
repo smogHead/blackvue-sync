@@ -9,14 +9,18 @@ When a BlackVue camera is connected to Wi-Fi as a client, it runs a small web se
 | Endpoint | Returns |
 |---|---|
 | `GET /blackvue_vod.cgi` | List of recordings, e.g. `n:/Record/20261127_153012_NF.mp4,s:1000000` |
-| `GET /Record/<file>` | The file itself |
+| `GET /Record/<file>` | The file itself. Supports HTTP `Range` requests, which is what makes resuming possible |
 
 The service asks for the list every 60 seconds. If the camera doesn't answer, the car isn't home. If it does answer, the service downloads every file the NAS doesn't have yet:
 
 - **Event, manual and impact clips go first**, then everything else, oldest first, because the camera overwrites its oldest footage first.
-- Files download to `name.part` and are renamed only once complete. If the car leaves mid-transfer, the partial file is deleted and the download starts again on the next visit.
-- Files already on the NAS are skipped, so it is safe to restart the container at any time.
+- **Interrupted downloads resume.** Files download to `name.part` and are renamed only once complete. If the car leaves mid-transfer, the `.part` file is kept. On the next visit, the service asks the camera for just the missing bytes and adds them to the end. (A front video is about 200 MB, so this saves a lot of time.) The service starts a file from scratch only if the camera won't send the range it asked for. A `.part` for a recording the camera no longer has is deleted.
+- **Nothing is downloaded twice.** A recording is skipped if:
+  - a file with the same name is **anywhere** in the storage folder. This includes other subfolders, so you can move clips you want to keep into your own folders (e.g. `dashcam/Keep forever/`);
+  - or it's in the **download history**, `.blackvue-sync/downloaded.txt` in the storage folder. So a clip you deleted on the NAS, or one the `KeepDays` clean-up removed, isn't fetched again while it's still on the camera's SD card. To get a file again, delete its line from that file (or delete the whole file). To turn this off completely, set `RememberDownloads=false`. Entries older than anything left on the camera are removed automatically, so the file doesn't grow forever.
+- It is safe to stop or restart the container at any time.
 - `.gps` and `.3gf` sidecar files are fetched too.
+- Downloads can run in parallel (`MaxParallelDownloads`), but the default is 1. On a real camera the total speed stayed at about 3.5 MB/s with 1 or 3 downloads, because the camera's Wi-Fi is the limit. With 1 at a time, each event clip finishes as early as possible, and fewer partial files are left waiting for the next visit.
 - Synology's own `@eaDir` (indexing) and `#recycle` (Recycle Bin) folders are never touched.
 
 ## 1. Prepare the dashcam
@@ -72,11 +76,14 @@ This is better for NAS models with little RAM, or if you'd rather not upload sou
 Go to **Container Manager → Container → blackvue-sync → Log**:
 
 ```
-2026-11-27 18:02:11 info: Dashcam connected (412 videos on SD card)
-2026-11-27 18:02:11 info: 37 files to download (13 videos)
-2026-11-27 18:02:19 info: [1/37] 20261127_173455_EF.mp4 48.2 MB at 6.1 MB/s
+2026-11-27 18:02:11 info: Download history: 3912 files already downloaded (/recordings/.blackvue-sync/downloaded.txt)
+2026-11-27 18:02:11 info: Dashcam connected (2107 videos on SD card)
+2026-11-27 18:02:12 info: 3920 recordings already on the NAS; 1 partial downloads will be resumed
+2026-11-27 18:02:12 info: 37 files to download (13 videos)
+2026-11-27 18:02:38 info: [1/37] 20261119_215302_BF.mp4 198.1 MB at 4.1 MB/s (resumed at 95.4 MB)
+2026-11-27 18:03:20 info: [2/37] 20261127_173455_EF.mp4 172.4 MB at 4.2 MB/s
 ...
-2026-11-27 18:09:40 info: Downloaded 37 files, 0.71 GB in 00:07:29
+2026-11-27 18:31:40 info: Downloaded 37 files, 5.21 GB in 00:29:28
 2026-11-28 08:15:03 info: Dashcam left the network
 ```
 
@@ -97,12 +104,14 @@ Set these in `docker-compose.yml` as `BlackVue__<Name>`.
 | `PollIntervalSeconds` | `60` | How often to look for the camera |
 | `ConnectTimeoutSeconds` | `5` | How long to wait before deciding the camera isn't home |
 | `StallTimeoutSeconds` | `60` | Abort a download if no data arrives for this long |
+| `MaxParallelDownloads` | `1` | Files downloaded at the same time (1-8). Only raise it if more connections actually give your camera more total speed |
+| `RememberDownloads` | `true` | Never re-download a file listed in `.blackvue-sync/downloaded.txt`, even if it was deleted from the NAS. Set `false` to re-download anything that's missing |
 | `DownloadGps` | `true` | Also fetch `.gps` and `.3gf` files |
 | `DownloadThumbnails` | `false` | Also fetch `.thm` files |
 | `RecordingTypes` | *(all)* | Comma list of type letters: `N` normal, `E` event, `P` parking, `M` manual, `I` parking impact |
 | `PrioritizeEvents` | `true` | Download non-normal clips before normal ones |
 | `Layout` | `Daily` | `Flat`, `Daily` (`2026-11-27/`) or `Monthly` (`2026-11/`) |
-| `KeepDays` | `0` | Delete recordings older than N days (0 = never). These deletions **bypass the Recycle Bin**. |
+| `KeepDays` | `0` | Delete recordings older than N days (0 = never). These deletions **bypass the Recycle Bin**. Deleted clips are not downloaded again, thanks to the history |
 | `MinFreeSpaceGb` | `5` | Stop downloading below this much free space on the volume |
 
 ## Developing in Visual Studio

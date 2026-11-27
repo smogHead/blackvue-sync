@@ -13,6 +13,8 @@ services:
       TZ: Europe/London                 # your timezone; used for folder dates and retention
       BlackVue__Host: 10.0.0.222      # dashcam's IP, reserved in your router's DHCP settings
       BlackVue__PollIntervalSeconds: 60
+      BlackVue__MaxParallelDownloads: 1 # files at once (1-8); camera Wi-Fi is the bottleneck, see README
+      BlackVue__RememberDownloads: "true" # never re-fetch a file once downloaded, even if deleted on the NAS
       BlackVue__DownloadGps: "true"
       BlackVue__DownloadThumbnails: "false"
       BlackVue__RecordingTypes: ""      # e.g. "E,M" for events + manual only; empty = everything

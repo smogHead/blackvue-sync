@@ -27,6 +27,18 @@ public sealed class SyncOptions
     /// <summary>Abort a download if no data arrives for this long (car drove off mid-transfer).</summary>
     public int StallTimeoutSeconds { get; set; } = 60;
 
+    /// <summary>
+    /// How many files to download at the same time (1-8). Measured on a real BlackVue: total speed stays ~3.5 MB/s
+    /// whatever this is set to (the camera Wi-Fi is the limit), so 1 finishes event clips soonest. Raise it only if your camera is faster.
+    /// </summary>
+    public int MaxParallelDownloads { get; set; } = 1;
+
+    /// <summary>
+    /// Keep a list of every file ever downloaded (in .blackvue-sync/downloaded.txt) and never fetch those again,
+    /// even after they have been deleted from the NAS. Turn off to re-download anything that is missing locally.
+    /// </summary>
+    public bool RememberDownloads { get; set; } = true;
+
     /// <summary>Also download the .gps and .3gf (accelerometer) sidecar files.</summary>
     public bool DownloadGps { get; set; } = true;
 

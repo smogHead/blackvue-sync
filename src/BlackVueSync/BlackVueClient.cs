@@ -1,27 +1,37 @@
 using System.Net;
+using System.Net.Http.Headers;
 using Microsoft.Extensions.Options;
 
 namespace BlackVueSync;
 
+/// <summary>Outcome of one download call.</summary>
+/// <param name="TotalBytes">Final size of the file on disk.</param>
+/// <param name="TransferredBytes">Bytes actually fetched this time (less than TotalBytes when resumed).</param>
+/// <param name="ResumedFrom">Offset the download continued from, or 0 for a fresh download.</param>
+public sealed record DownloadResult(long TotalBytes, long TransferredBytes, long ResumedFrom);
+
 /// <summary>
 /// Talks to the dashcam's built-in HTTP server (available when it is connected to Wi-Fi in client/station mode).
 ///   GET /blackvue_vod.cgi   -> list of recordings, one per line: "n:/Record/20261127_153012_NF.mp4,s:1000000"
-///   GET /Record/{file}      -> the file itself
+///   GET /Record/{file}      -> the file itself; supports Range requests, which is what makes resuming possible
 /// </summary>
 public sealed class BlackVueClient : IDisposable
 {
     private readonly HttpClient _http;
     private readonly SyncOptions _options;
 
-    public BlackVueClient(IOptions<SyncOptions> options)
+    public BlackVueClient(IOptions<SyncOptions> options) : this(options.Value, null) { }
+
+    /// <summary>For tests: lets a fake handler stand in for the camera.</summary>
+    internal BlackVueClient(SyncOptions options, HttpMessageHandler? handler)
     {
-        _options = options.Value;
-        var handler = new SocketsHttpHandler
+        _options = options;
+        handler ??= new SocketsHttpHandler
         {
             ConnectTimeout = TimeSpan.FromSeconds(_options.ConnectTimeoutSeconds),
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-            // The camera's web server is slow and single-threaded; don't hammer it.
-            MaxConnectionsPerServer = 1,
+            // One connection per parallel download, plus one so the file-list request never waits behind them.
+            MaxConnectionsPerServer = _options.MaxParallelDownloads + 1,
         };
         var host = _options.Host.Contains("://") ? _options.Host : "http://" + _options.Host;
         _http = new HttpClient(handler)
@@ -59,28 +69,57 @@ public sealed class BlackVueClient : IDisposable
         return result;
     }
 
+    public static string PartPath(string localPath) => localPath + ".part";
+
     /// <summary>
-    /// Downloads to "file.part" then renames, so a half-finished file is never mistaken for a complete one.
-    /// Returns bytes written, or null if the file doesn't exist on the camera (404).
+    /// Downloads into "file.part", then renames it to the final name once complete, so a half-finished file is
+    /// never mistaken for a finished one. If a .part file is already there from an interrupted visit, it asks the
+    /// camera only for the missing bytes and appends them. The .part is kept when a download is interrupted, so
+    /// the next visit can carry on from there.
+    /// Returns null if the file doesn't exist on the camera (404).
     /// </summary>
-    public async Task<long?> DownloadAsync(string remotePath, string localPath, CancellationToken ct)
+    public async Task<DownloadResult?> DownloadAsync(string remotePath, string localPath, CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(localPath)!);
-        var partPath = localPath + ".part";
+        var partPath = PartPath(localPath);
         var stallTimeout = TimeSpan.FromSeconds(_options.StallTimeoutSeconds);
+        var existing = File.Exists(partPath) ? new FileInfo(partPath).Length : 0;
 
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(ct);
         stall.CancelAfter(stallTimeout);
         try
         {
-            using var response = await _http.GetAsync(remotePath.TrimStart('/'), HttpCompletionOption.ResponseHeadersRead, stall.Token);
-            if (response.StatusCode == HttpStatusCode.NotFound) return null;
+            using var request = new HttpRequestMessage(HttpMethod.Get, remotePath.TrimStart('/'));
+            if (existing > 0) request.Headers.Range = new RangeHeaderValue(existing, null);
+
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, stall.Token);
+
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                TryDelete(partPath); // gone from the camera; the partial copy is useless now
+                return null;
+            }
+            if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+            {
+                // Our .part is as long as (or longer than) the file. We can't tell if it's intact, so start over.
+                TryDelete(partPath);
+                throw new IOException("Partial file did not match the camera's copy; it will be downloaded again");
+            }
             response.EnsureSuccessStatusCode();
 
-            var expected = response.Content.Headers.ContentLength;
-            long total = 0;
+            // Work out where this response starts. Only append if the camera really sent the bytes we asked for;
+            // if it ignored the Range header (200) or answered with a different range, start from zero.
+            var range = response.Content.Headers.ContentRange;
+            var resumed = response.StatusCode == HttpStatusCode.PartialContent && range?.From == existing;
+            var offset = resumed ? existing : 0;
+            long? expectedTotal = resumed
+                ? range!.Length
+                : response.Content.Headers.ContentLength;
+
+            long written = 0;
             await using (var source = await response.Content.ReadAsStreamAsync(stall.Token))
-            await using (var target = new FileStream(partPath, FileMode.Create, FileAccess.Write, FileShare.None, 1 << 16, useAsync: true))
+            await using (var target = new FileStream(partPath, resumed ? FileMode.Append : FileMode.Create,
+                             FileAccess.Write, FileShare.None, 1 << 16, useAsync: true))
             {
                 var buffer = new byte[1 << 16];
                 while (true)
@@ -89,26 +128,25 @@ public sealed class BlackVueClient : IDisposable
                     var read = await source.ReadAsync(buffer, stall.Token);
                     if (read == 0) break;
                     await target.WriteAsync(buffer.AsMemory(0, read), ct);
-                    total += read;
+                    written += read;
                 }
             }
 
-            if (expected is long len && total != len)
+            var total = offset + written;
+            if (expectedTotal is long len && total != len)
+            {
+                if (total > len) TryDelete(partPath); // can't be right; don't build on it
                 throw new IOException($"Incomplete download: got {total:N0} of {len:N0} bytes");
+            }
 
             File.Move(partPath, localPath, overwrite: true);
-            return total;
+            return new DownloadResult(total, written, offset);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            TryDelete(partPath);
             throw new TimeoutException($"No data received for {stallTimeout.TotalSeconds:0}s");
         }
-        catch
-        {
-            TryDelete(partPath);
-            throw;
-        }
+        // Any other failure (car drove off, shutdown): keep the .part so the next visit can resume it.
     }
 
     private static void TryDelete(string path)
