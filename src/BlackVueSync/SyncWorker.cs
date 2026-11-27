@@ -29,9 +29,9 @@ public sealed class SyncWorker(BlackVueClient camera, IOptions<SyncOptions> opti
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        Directory.CreateDirectory(_options.Destination);
         logger.LogInformation("Watching for BlackVue at {Host}; saving to {Destination} (checking every {Interval}s)",
             _options.Host, _options.Destination, _options.PollIntervalSeconds);
+        CheckDestinationWritable();
         if (_options.RememberDownloads)
             logger.LogInformation("Download history: {Count} files already downloaded ({Path})", _history.Count, _history.FilePath);
 
@@ -78,6 +78,11 @@ public sealed class SyncWorker(BlackVueClient camera, IOptions<SyncOptions> opti
         var pending = plan
             .Where(r => !_knownMissing.Contains(r.RemotePath) && !IsAlreadyDownloaded(r))
             .ToList();
+
+        // Don't start downloads that are bound to fail. Re-checked every poll, so fixing the folder
+        // permissions in DSM is picked up without restarting the container.
+        if (pending.Count > 0 && !_destinationWritable && !CheckDestinationWritable())
+            return;
 
         if (pending.Count > 0)
             await DownloadAllAsync(pending, ct);
@@ -204,6 +209,12 @@ public sealed class SyncWorker(BlackVueClient camera, IOptions<SyncOptions> opti
                     if (Interlocked.Increment(ref failed) >= 5)
                         Abort("Too many failures, pausing until next poll");
                 }
+                catch (UnauthorizedAccessException ex)
+                {
+                    // The NAS refused to let us write: a permissions problem, not the car leaving. Say so plainly.
+                    _destinationWritable = false;
+                    Abort(PermissionHelp, ex.Message, ProcessIdentity());
+                }
                 catch (Exception ex)
                 {
                     // Connection-level failure: most likely the car drove away. Stop everything and retry on the next poll.
@@ -218,6 +229,64 @@ public sealed class SyncWorker(BlackVueClient camera, IOptions<SyncOptions> opti
 
         ct.ThrowIfCancellationRequested();
         logger.LogInformation("Downloaded {Count} files, {GB:N2} GB in {Elapsed:hh\\:mm\\:ss}", done, bytes / 1e9, total.Elapsed);
+    }
+
+    private const string PermissionHelp =
+        "Permission denied writing to the recordings folder ({Error}). The container is running as {Identity}, " +
+        "and that user can't create files or folders there. On Synology: give that DSM user Read/Write on the " +
+        "shared folder (Control Panel > Shared Folder > Edit > Permissions), or set 'user:' in docker-compose.yml " +
+        "to the UID:GID of a user who has it (run 'id <username>' over SSH). See README > Troubleshooting.";
+
+    private bool _destinationWritable;
+
+    /// <summary>
+    /// Creates and deletes a test folder and file in the destination. Logs a clear explanation if that fails,
+    /// instead of letting every download fail with a confusing error.
+    /// </summary>
+    private bool CheckDestinationWritable()
+    {
+        var probe = Path.Combine(_options.Destination, $".write-test-{Environment.ProcessId}");
+        try
+        {
+            Directory.CreateDirectory(_options.Destination);
+            Directory.CreateDirectory(probe);
+            File.WriteAllText(Path.Combine(probe, "test"), "ok");
+            Directory.Delete(probe, recursive: true);
+            if (!_destinationWritable)
+                logger.LogInformation("Recordings folder {Destination} is writable (running as {Identity})", _options.Destination, ProcessIdentity());
+            _destinationWritable = true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+        {
+            if (_destinationWritable || !_permissionErrorLogged)
+                logger.LogError(PermissionHelp, ex.Message, ProcessIdentity());
+            _permissionErrorLogged = true;
+            _destinationWritable = false;
+            try { if (Directory.Exists(probe)) Directory.Delete(probe, recursive: true); } catch { /* ignore */ }
+        }
+        return _destinationWritable;
+    }
+
+    private bool _permissionErrorLogged;
+
+    /// <summary>"uid=1026 gid=100" inside a Linux container (read from /proc), or the user name elsewhere.</summary>
+    private static string ProcessIdentity()
+    {
+        try
+        {
+            if (File.Exists("/proc/self/status"))
+            {
+                string? uid = null, gid = null;
+                foreach (var line in File.ReadLines("/proc/self/status"))
+                {
+                    if (line.StartsWith("Uid:")) uid = line.Split('\t', StringSplitOptions.RemoveEmptyEntries)[1];
+                    else if (line.StartsWith("Gid:")) gid = line.Split('\t', StringSplitOptions.RemoveEmptyEntries)[1];
+                }
+                if (uid is not null) return $"uid={uid} gid={gid}";
+            }
+        }
+        catch { /* fall through */ }
+        return $"user '{Environment.UserName}'";
     }
 
     private bool HasEnoughFreeSpace()

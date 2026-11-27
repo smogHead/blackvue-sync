@@ -33,12 +33,12 @@ The service asks for the list every 60 seconds. If the camera doesn't answer, th
 
 1. **Package Center**: install **Container Manager**. This creates a `docker` shared folder.
 2. **Control Panel → Shared Folder → Create**: make a shared folder called `dashcam`. Give your DSM user **Read/Write** access to it.
-3. **Find your user ID** (optional, but it avoids permission errors). The default `1026:100` is correct for the first user you created on most NAS setups. To check, turn on SSH in **Control Panel → Terminal & SNMP**, then run:
+3. **Find your user ID.** Don't skip this: if it's wrong, every download fails with "Access … denied". The default `1026:100` is only a guess (it's often the first user created on the NAS). To check, turn on SSH in **Control Panel → Terminal & SNMP**, then run:
    ```sh
    ssh you@nas
    id you        # e.g. uid=1026(you) gid=100(users)
    ```
-   Put those two numbers in the `user:` line of `docker-compose.yml`.
+   Put those two numbers in the `user:` line of `docker-compose.yml`. Make sure that user has **Read/Write** on `dashcam` (step 2). [Troubleshooting](#troubleshooting) has a way to do this without SSH.
 
 ## 3. Configure
 
@@ -155,7 +155,16 @@ Pressing **F5** runs the service on your PC, using the settings in `src/BlackVue
 
 ## Troubleshooting
 
-- **`Permission denied` in the log**: the `user:` UID/GID can't write to the `dashcam` shared folder. Fix the numbers (step 2.3), or give that user Read/Write in the shared folder's permissions.
+- **`Permission denied writing to the recordings folder` / `Access to the path '/recordings/…' is denied`**: the container's user can't write to the `dashcam` shared folder. The container runs as the `user:` UID:GID in `docker-compose.yml` (the log line shows which, e.g. `running as uid=1026 gid=100`). Synology controls shared-folder access with DSM permissions (ACLs), so that UID has to belong to a DSM user who has **Read/Write** on `dashcam`. To fix it:
+  1. **Choose the DSM user** the container should run as: your own account, or a new one just for this (e.g. `blackvue`, via **Control Panel → User & Group → Create**).
+  2. **Find that user's UID and GID.** Do one of these:
+     - Over SSH (turn it on in **Control Panel → Terminal & SNMP**), run `id blackvue`. You'll see something like `uid=1027(blackvue) gid=100(users)`.
+     - Or, without SSH: go to **Control Panel → Task Scheduler → Create → Scheduled Task → User-defined script**, and set *User* to `root`. Enter the script `id blackvue > /volume1/dashcam/id.txt`, save it, select it and click **Run**. Open `dashcam/id.txt` in File Station, then delete the file and the task.
+  3. **Grant access:** go to **Control Panel → Shared Folder**, select `dashcam` and click **Edit → Permissions**. Tick **Read/Write** for that user and click **Save**. This also applies to the existing date folders inside.
+  4. **Match the container:** set `user: "1027:100"` (your numbers) in `docker-compose.yml`. Then in **Container Manager → Project → blackvue-sync**, click **Stop**, then **Build** (option A) or **Start** (option B).
+  5. Check the log for `Recordings folder /recordings is writable (running as uid=1027 gid=100)`.
+
+  If you only fix the permissions (step 3) and the UID already matched, you don't need to restart. The service re-checks the folder on each poll and carries on by itself.
 - **The camera never shows as connected**: check that `http://<ip>/blackvue_vod.cgi` opens from a PC on the same network. Also check that the NAS and the camera are on the same LAN or VLAN, and not on a guest Wi-Fi that isolates clients.
 - **Only a few clips download before it stops**: the camera turns off its Wi-Fi when the ignition goes off. Hardwired parking mode (or a BlackVue battery pack) keeps it powered long enough to finish.
 - **Downloads are slow (about 3–4 MB/s or less)**: the camera is probably on 2.4 GHz Wi-Fi, or has a weak 5 GHz signal. Expect about 17 MB/s on a good 5 GHz connection (see [Download speed](#download-speed)).
