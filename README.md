@@ -20,12 +20,12 @@ The service asks for the list every 60 seconds. If the camera doesn't answer, th
   - or it's in the **download history**, `.blackvue-sync/downloaded.txt` in the storage folder. So a clip you deleted on the NAS, or one the `KeepDays` clean-up removed, isn't fetched again while it's still on the camera's SD card. To get a file again, delete its line from that file (or delete the whole file). To turn this off completely, set `RememberDownloads=false`. Entries older than anything left on the camera are removed automatically, so the file doesn't grow forever.
 - It is safe to stop or restart the container at any time.
 - `.gps` and `.3gf` sidecar files are fetched too.
-- Downloads can run in parallel (`MaxParallelDownloads`), but the default is 1. On a real camera the total speed stayed at about 3.5 MB/s with 1 or 3 downloads, because the camera's Wi-Fi is the limit. With 1 at a time, each event clip finishes as early as possible, and fewer partial files are left waiting for the next visit.
+- Downloads can run in parallel (`MaxParallelDownloads`), but the default is 1. On a real camera, 3 downloads at once got no more total speed than 1, on 2.4 GHz or 5 GHz Wi-Fi (see [Download speed](#download-speed)). With 1 at a time, each event clip finishes as early as possible, and fewer partial files are left waiting for the next visit.
 - Synology's own `@eaDir` (indexing) and `#recycle` (Recycle Bin) folders are never touched.
 
 ## 1. Prepare the dashcam
 
-1. In the BlackVue app, open **Settings → Wi-Fi / Cloud** and add your home Wi-Fi network. The camera must join your network as a client; its own hotspot won't work.
+1. In the BlackVue app, open **Settings → Wi-Fi / Cloud** and add your home Wi-Fi network. The camera must join your network as a client; its own hotspot won't work. **Use your 5 GHz network if the camera supports it and the signal reaches where you park.** It was about five times faster than 2.4 GHz in testing (see [Download speed](#download-speed)).
 2. In your router, add a **DHCP reservation** so the camera always gets the same IP (e.g. `192.168.1.50`).
 3. To check it works, park at home and open `http://192.168.1.50/blackvue_vod.cgi` in a browser. You should see a list of files.
 
@@ -80,12 +80,35 @@ Go to **Container Manager → Container → blackvue-sync → Log**:
 2026-11-27 18:02:11 info: Dashcam connected (2107 videos on SD card)
 2026-11-27 18:02:12 info: 3920 recordings already on the NAS; 1 partial downloads will be resumed
 2026-11-27 18:02:12 info: 37 files to download (13 videos)
-2026-11-27 18:02:38 info: [1/37] 20261119_215302_BF.mp4 198.1 MB at 4.1 MB/s (resumed at 95.4 MB)
-2026-11-27 18:03:20 info: [2/37] 20261127_173455_EF.mp4 172.4 MB at 4.2 MB/s
+2026-11-27 18:02:18 info: [1/37] 20261119_215302_BF.mp4 198.1 MB at 17.2 MB/s (resumed at 95.4 MB)
+2026-11-27 18:02:28 info: [2/37] 20261127_173455_EF.mp4 172.4 MB at 17.5 MB/s
 ...
-2026-11-27 18:31:40 info: Downloaded 37 files, 5.21 GB in 00:29:28
+2026-11-27 18:07:18 info: Downloaded 37 files, 5.21 GB in 00:05:06
 2026-11-28 08:15:03 info: Dashcam left the network
 ```
+
+## Download speed
+
+Measured on 27 Nov 2026 with a real BlackVue (front + rear) parked at home. The service ran against the camera for 40–45 seconds per run.
+
+| Camera Wi-Fi | Downloads at once | Total speed |
+|---|---|---|
+| 2.4 GHz | 1 | ≈3.5 MB/s |
+| 2.4 GHz | 3 | ≈3.5 MB/s (shared between the 3) |
+| **5 GHz** | **1** | **≈17.3 MB/s** (two runs: 17.0, 17.5) |
+| 5 GHz | 3 | ≈17.8 MB/s (two runs: 18.4, 17.2), within run-to-run noise of 1 |
+
+What that means in practice:
+
+| | 2.4 GHz | 5 GHz |
+|---|---|---|
+| One full-length front video (≈198 MB) | ≈1 minute | ≈12 seconds |
+| Rear video (≈83 MB) | ≈25 seconds | ≈5 seconds |
+| A full SD card (≈2,100 videos, up to ≈300 GB) for the first sync | about a day | about 5 hours at most |
+
+- **5 GHz is the single biggest speed-up.** If your camera and router support it, use it.
+- **More parallel downloads don't help.** The camera has a fixed total speed that parallel downloads just share. On 5 GHz, 3 at once gave each file about 5–8 MB/s, against about 17 MB/s for one at a time. Leave `MaxParallelDownloads` at 1, so the most important clip (events go first) finishes soonest.
+- **The trade-off is range.** 5 GHz doesn't reach as far or get through walls as well as 2.4 GHz. If the log shows lots of "Dashcam left the network" followed by reconnects, the signal where you park is too weak. Interrupted files resume, so nothing is lost, but it will be slower. In that case a closer access point, or going back to 2.4 GHz, may work better.
 
 Recordings appear in File Station under `dashcam/2026-11-27/` and so on. To watch them on your phone, add the `dashcam` folder to **Synology Photos** (Settings → Shared Space) or open them from the DS file app.
 
@@ -135,4 +158,4 @@ Pressing **F5** runs the service on your PC, using the settings in `src/BlackVue
 - **`Permission denied` in the log**: the `user:` UID/GID can't write to the `dashcam` shared folder. Fix the numbers (step 2.3), or give that user Read/Write in the shared folder's permissions.
 - **The camera never shows as connected**: check that `http://<ip>/blackvue_vod.cgi` opens from a PC on the same network. Also check that the NAS and the camera are on the same LAN or VLAN, and not on a guest Wi-Fi that isolates clients.
 - **Only a few clips download before it stops**: the camera turns off its Wi-Fi when the ignition goes off. Hardwired parking mode (or a BlackVue battery pack) keeps it powered long enough to finish.
-- Expect transfers of about 2 to 8 MB/s, depending on the model and signal strength.
+- **Downloads are slow (about 3–4 MB/s or less)**: the camera is probably on 2.4 GHz Wi-Fi, or has a weak 5 GHz signal. Expect about 17 MB/s on a good 5 GHz connection (see [Download speed](#download-speed)).

@@ -28,8 +28,9 @@ public sealed class SyncOptions
     public int StallTimeoutSeconds { get; set; } = 60;
 
     /// <summary>
-    /// How many files to download at the same time (1-8). Measured on a real BlackVue: total speed stays ~3.5 MB/s
-    /// whatever this is set to (the camera Wi-Fi is the limit), so 1 finishes event clips soonest. Raise it only if your camera is faster.
+    /// How many files to download at the same time (1-8). Measured on a real BlackVue, the total speed was the same
+    /// whatever this is set to (~3.5 MB/s on 2.4 GHz Wi-Fi, ~17 MB/s on 5 GHz): parallel downloads just share it.
+    /// So 1 finishes event clips soonest. Raise it only if your camera gets more total speed from more connections.
     /// </summary>
     public int MaxParallelDownloads { get; set; } = 1;
 
