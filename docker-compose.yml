@@ -11,7 +11,7 @@ services:
     user: "1026:100"
     environment:
       TZ: Europe/London                 # your timezone; used for folder dates and retention
-      BlackVue__Host: 192.168.1.50      # dashcam's IP, reserved in your router's DHCP settings
+      BlackVue__Host: 10.0.0.222      # dashcam's IP, reserved in your router's DHCP settings
       BlackVue__PollIntervalSeconds: 60
       BlackVue__DownloadGps: "true"
       BlackVue__DownloadThumbnails: "false"

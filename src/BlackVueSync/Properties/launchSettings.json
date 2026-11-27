@@ -4,8 +4,8 @@
       "commandName": "Project",
       "environmentVariables": {
         "DOTNET_ENVIRONMENT": "Development",
-        "BlackVue__Host": "192.168.1.50",
-        "BlackVue__Destination": "C:\Temp\dashcam",
+        "BlackVue__Host": "10.0.0.222",
+        "BlackVue__Destination": "C:\\Temp\\dashcam",
         "BlackVue__PollIntervalSeconds": "10"
       }
     }
